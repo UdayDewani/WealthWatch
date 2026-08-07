@@ -1,0 +1,32 @@
+# Environment and credentials
+.env
+.env.*
+*.env
+upstox_token.json
+
+# Databases
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+ENV/
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+
+# Logs
+*.log
+logs/
+
+# Operating System & IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
