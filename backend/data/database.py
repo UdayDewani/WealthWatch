@@ -9,6 +9,7 @@ from typing import Optional
 import aiosqlite
 
 from models.stock_analysis import HistoricalPattern, StockProfile
+from models.client import Client, ClientCreate, ClientUpdate
 
 logger = logging.getLogger("database")
 
@@ -104,6 +105,25 @@ class StockDatabase:
                 """
                 CREATE INDEX IF NOT EXISTS idx_analysis_analyzed_at
                 ON market_analysis (analyzed_at)
+                """
+            )
+
+            # ----------------------------------------------------------
+            # clients — wealth manager's customer records
+            # ----------------------------------------------------------
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS clients (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name         TEXT NOT NULL,
+                    email        TEXT NOT NULL,
+                    phone        TEXT NOT NULL,
+                    pan          TEXT NOT NULL,
+                    risk_profile TEXT NOT NULL DEFAULT 'moderate',
+                    aum          REAL NOT NULL DEFAULT 0,
+                    joined_date  TEXT NOT NULL,
+                    notes        TEXT NOT NULL DEFAULT ''
+                )
                 """
             )
 
@@ -360,3 +380,79 @@ class StockDatabase:
                     result["_analyzed_at"] = row[0]
                     return result
         return None
+
+    # ------------------------------------------------------------------
+    # Client CRUD  (wealth manager's customers)
+    # ------------------------------------------------------------------
+
+    async def create_client(self, data: ClientCreate) -> Client:
+        """Insert a new client row and return the full Client with its new id."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO clients (name, email, phone, pan, risk_profile, aum, joined_date, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (data.name, data.email, data.phone, data.pan,
+                 data.risk_profile, data.aum, data.joined_date, data.notes),
+            )
+            await db.commit()
+            new_id = cursor.lastrowid
+        logger.info("Created client id=%d name=%s", new_id, data.name)
+        return Client(id=new_id, **data.model_dump())
+
+    async def get_all_clients(self) -> list[Client]:
+        """Return all client rows ordered by name."""
+        clients: list[Client] = []
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM clients ORDER BY name ASC"
+            ) as cursor:
+                async for row in cursor:
+                    clients.append(Client(**dict(row)))
+        return clients
+
+    async def get_client(self, client_id: int) -> Optional[Client]:
+        """Return a single client by id, or None if not found."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM clients WHERE id = ?", (client_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return Client(**dict(row))
+        return None
+
+    async def update_client(self, client_id: int, data: ClientUpdate) -> Optional[Client]:
+        """
+        Apply a partial update to the client row.
+        Returns the updated Client, or None if not found.
+        """
+        updates = {k: v for k, v in data.model_dump().items() if v is not None}
+        if not updates:
+            return await self.get_client(client_id)
+
+        set_clause = ", ".join(f"{col} = ?" for col in updates)
+        values = list(updates.values()) + [client_id]
+
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                f"UPDATE clients SET {set_clause} WHERE id = ?", values
+            )
+            await db.commit()
+        logger.info("Updated client id=%d fields=%s", client_id, list(updates.keys()))
+        return await self.get_client(client_id)
+
+    async def delete_client(self, client_id: int) -> bool:
+        """Delete a client by id. Returns True if a row was removed."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "DELETE FROM clients WHERE id = ?", (client_id,)
+            )
+            await db.commit()
+            deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info("Deleted client id=%d", client_id)
+        return deleted

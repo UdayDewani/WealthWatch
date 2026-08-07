@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import RedirectResponse, HTMLResponse
 
 from data.upstox_client import UpstoxClient
 from data.redis_cache import RedisCache
 from data.database import StockDatabase
 from web.ws_manager import manager
+from models.client import ClientCreate, ClientUpdate
 
 router = APIRouter()
 
@@ -200,3 +201,57 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
     except Exception:
         manager.disconnect(ws)
+
+
+# ---------------------------------------------------------------------------
+# Clients CRUD  — wealth manager's customers
+# ---------------------------------------------------------------------------
+
+@router.get("/api/clients")
+async def list_clients():
+    """Return all clients ordered by name."""
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    clients = await _db.get_all_clients()
+    return {"count": len(clients), "clients": [c.model_dump() for c in clients]}
+
+
+@router.post("/api/clients", status_code=201)
+async def create_client(data: ClientCreate):
+    """Create a new client record."""
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    client = await _db.create_client(data)
+    return client.model_dump()
+
+
+@router.get("/api/clients/{client_id}")
+async def get_client(client_id: int):
+    """Return a single client by id."""
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    client = await _db.get_client(client_id)
+    if client is None:
+        raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+    return client.model_dump()
+
+
+@router.put("/api/clients/{client_id}")
+async def update_client(client_id: int, data: ClientUpdate):
+    """Partially update a client record."""
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    client = await _db.update_client(client_id, data)
+    if client is None:
+        raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
+    return client.model_dump()
+
+
+@router.delete("/api/clients/{client_id}", status_code=204)
+async def delete_client(client_id: int):
+    """Delete a client record."""
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    removed = await _db.delete_client(client_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Client {client_id} not found")
