@@ -3,6 +3,7 @@ from .yahoo_fetcher import NewsFetcher, fetch_financial_news
 from .yfinance_client import YFinanceClient
 from .database import StockDatabase
 from .redis_cache import RedisCache, cache as redis_cache
+from .multi_asset_client import MultiAssetClient
 
 __all__ = [
     "UpstoxClient",
@@ -12,5 +13,6 @@ __all__ = [
     "StockDatabase",
     "RedisCache",
     "redis_cache",
+    "MultiAssetClient",
 ]
 

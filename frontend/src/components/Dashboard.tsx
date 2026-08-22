@@ -39,11 +39,8 @@ export default function Dashboard({ onAnalysis, onMarketData }: Props) {
     setError(null);
     try {
       const d = await fetchMarketOverview(25000);
-      setData(prev => {
-        const merged = { ...prev, ...d, analysis: prev?.analysis || d.analysis };
-        if (onMarketData) onMarketData(merged);
-        return merged;
-      });
+      setData(prev => ({ ...prev, ...d, analysis: prev?.analysis || d.analysis }));
+      if (onMarketData) onMarketData(d);
       setTime(new Date().toLocaleTimeString());
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Request failed';
@@ -66,11 +63,8 @@ export default function Dashboard({ onAnalysis, onMarketData }: Props) {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data);
-        setData(prev => {
-          const merged = prev ? { ...prev, ...msg } : msg;
-          if (onMarketData) onMarketData(merged);
-          return merged;
-        });
+        setData(prev => prev ? { ...prev, ...msg } : msg);
+        if (onMarketData) onMarketData(msg);
         setTime(new Date().toLocaleTimeString());
         if (msg.analysis) onAnalysis(msg.analysis);
       } catch { /* ignore malformed messages */ }

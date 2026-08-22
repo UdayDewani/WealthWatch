@@ -1,8 +1,7 @@
 const navItems = [
-  { page: 'dashboard', label: 'Dashboard',        icon: GridIcon },
-  { page: 'clients',   label: 'Clients',           icon: UsersIcon },
-  { page: 'portfolio', label: 'Portfolio',         icon: PieIcon },
-  { page: 'recommend', label: 'AI Recommendations', icon: StarIcon, tag: 'Beta' },
+  { page: 'dashboard', label: 'Dashboard', icon: GridIcon },
+  { page: 'markets',   label: 'Markets',   icon: MarketsIcon },
+  { page: 'clients',   label: 'Clients',   icon: UsersIcon },
 ];
 
 export default function Sidebar({ active, onNavigate }: { active: string; onNavigate: (p: string) => void }) {
@@ -41,6 +40,15 @@ function GridIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
       <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+    </svg>
+  );
+}
+
+function MarketsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
+      <polyline points="16 7 22 7 22 13"/>
     </svg>
   );
 }

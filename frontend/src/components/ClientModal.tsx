@@ -68,23 +68,21 @@ export default function ClientModal({ open, client, onClose, onSave }: Props) {
 
           <div className="form-row">
             <div className="form-group">
-              <label>Full Name *</label>
               <input
                 className="form-input"
                 value={form.name}
                 onChange={e => set('name', e.target.value)}
-                placeholder="Rajesh Sharma"
+                placeholder="Full Name *"
                 required
               />
             </div>
             <div className="form-group">
-              <label>Email *</label>
               <input
                 className="form-input"
                 type="email"
                 value={form.email}
                 onChange={e => set('email', e.target.value)}
-                placeholder="rajesh@example.com"
+                placeholder="Email *"
                 required
               />
             </div>
@@ -92,22 +90,20 @@ export default function ClientModal({ open, client, onClose, onSave }: Props) {
 
           <div className="form-row">
             <div className="form-group">
-              <label>Phone *</label>
               <input
                 className="form-input"
                 value={form.phone}
                 onChange={e => set('phone', e.target.value)}
-                placeholder="+91 98765 43210"
+                placeholder="Phone *"
                 required
               />
             </div>
             <div className="form-group">
-              <label>PAN Number</label>
               <input
                 className="form-input"
                 value={form.pan}
                 onChange={e => set('pan', e.target.value.toUpperCase())}
-                placeholder="ABCDE1234F"
+                placeholder="PAN Number"
                 maxLength={10}
               />
             </div>
@@ -115,50 +111,48 @@ export default function ClientModal({ open, client, onClose, onSave }: Props) {
 
           <div className="form-row">
             <div className="form-group">
-              <label>Risk Profile</label>
               <select
                 className="form-input"
                 value={form.risk_profile}
                 onChange={e => set('risk_profile', e.target.value)}
               >
+                <option value="" disabled>Risk Profile</option>
                 <option value="conservative">Conservative</option>
                 <option value="moderate">Moderate</option>
                 <option value="aggressive">Aggressive</option>
               </select>
             </div>
             <div className="form-group">
-              <label>AUM (₹)</label>
               <input
                 className="form-input"
                 type="number"
                 min={0}
                 value={form.aum}
                 onChange={e => set('aum', parseFloat(e.target.value) || 0)}
-                placeholder="5000000"
+                placeholder="AUM (₹)"
               />
             </div>
           </div>
 
           <div className="form-row">
             <div className="form-group">
-              <label>Client Since</label>
               <input
                 className="form-input"
                 type="date"
                 value={form.joined_date}
                 onChange={e => set('joined_date', e.target.value)}
+                title="Client Since"
               />
             </div>
           </div>
 
           <div className="form-group" style={{ marginTop: 4 }}>
-            <label>Notes</label>
             <textarea
               className="form-input"
               rows={3}
               value={form.notes}
               onChange={e => set('notes', e.target.value)}
-              placeholder="Investment goals, preferences, special instructions..."
+              placeholder="Notes — investment goals, preferences, special instructions..."
               style={{ resize: 'vertical' }}
             />
           </div>

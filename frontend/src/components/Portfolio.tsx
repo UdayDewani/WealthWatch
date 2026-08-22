@@ -1,38 +1,73 @@
-const holdings = [
-  { name: 'Reliance Industries', symbol: 'RELIANCE', qty: 50, avgCost: 2670, ltp: 2890.45, pnl: 11022.50, returns: 8.26 },
-  { name: 'Tata Consultancy Services', symbol: 'TCS', qty: 30, avgCost: 3750, ltp: 3892.10, pnl: 4263.00, returns: 3.79 },
-  { name: 'HDFC Bank', symbol: 'HDFCBANK', qty: 80, avgCost: 1620, ltp: 1678.30, pnl: 4664.00, returns: 3.60 },
-  { name: 'Infosys', symbol: 'INFY', qty: 60, avgCost: 1480, ltp: 1520.65, pnl: 2439.00, returns: 2.75 },
-  { name: 'ICICI Bank', symbol: 'ICICIBANK', qty: 100, avgCost: 1050, ltp: 1123.40, pnl: 7340.00, returns: 6.99 },
-  { name: 'Bharti Airtel', symbol: 'BHARTIARTL', qty: 40, avgCost: 1280, ltp: 1345.20, pnl: 2608.00, returns: 5.09 },
-  { name: 'ITC', symbol: 'ITC', qty: 150, avgCost: 420, ltp: 445.30, pnl: 3795.00, returns: 6.02 },
-  { name: 'Larsen & Toubro', symbol: 'LT', qty: 25, avgCost: 3300, ltp: 3456.75, pnl: 3918.75, returns: 4.75 },
+import type { Client } from '../api/clients';
+
+interface Props {
+  client: Client;
+  onBack: () => void;
+}
+
+const RISK_COLORS: Record<string, string> = {
+  conservative: '#059669',
+  moderate:     '#d97706',
+  aggressive:   '#dc2626',
+};
+const RISK_BG: Record<string, string> = {
+  conservative: '#dcfce7',
+  moderate:     '#fef9c3',
+  aggressive:   '#fef2f2',
+};
+
+function initials(name: string) {
+  return name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
+// Mock holdings — in a real app these would come from a per-client API
+const BASE_HOLDINGS = [
+  { name: 'Reliance Industries',     symbol: 'RELIANCE',   qty: 50,  avgCost: 2670, ltp: 2890.45 },
+  { name: 'Tata Consultancy Services', symbol: 'TCS',       qty: 30,  avgCost: 3750, ltp: 3892.10 },
+  { name: 'HDFC Bank',               symbol: 'HDFCBANK',   qty: 80,  avgCost: 1620, ltp: 1678.30 },
+  { name: 'Infosys',                 symbol: 'INFY',       qty: 60,  avgCost: 1480, ltp: 1520.65 },
+  { name: 'ICICI Bank',              symbol: 'ICICIBANK',  qty: 100, avgCost: 1050, ltp: 1123.40 },
+  { name: 'Bharti Airtel',           symbol: 'BHARTIARTL', qty: 40,  avgCost: 1280, ltp: 1345.20 },
+  { name: 'ITC',                     symbol: 'ITC',        qty: 150, avgCost: 420,  ltp: 445.30  },
+  { name: 'Larsen & Toubro',         symbol: 'LT',         qty: 25,  avgCost: 3300, ltp: 3456.75 },
 ];
 
 const allocation = [
-  { name: 'Banking', pct: 30, color: '#2563eb' },
-  { name: 'IT', pct: 22, color: '#7c3aed' },
-  { name: 'Energy', pct: 15, color: '#059669' },
-  { name: 'Auto', pct: 12, color: '#d97706' },
-  { name: 'FMCG', pct: 11, color: '#dc2626' },
-  { name: 'Others', pct: 10, color: '#64748b' },
+  { name: 'Banking',  pct: 30, color: '#2563eb' },
+  { name: 'IT',       pct: 22, color: '#7c3aed' },
+  { name: 'Energy',   pct: 15, color: '#059669' },
+  { name: 'Auto',     pct: 12, color: '#d97706' },
+  { name: 'FMCG',     pct: 11, color: '#dc2626' },
+  { name: 'Others',   pct: 10, color: '#64748b' },
 ];
 
-export default function Portfolio() {
-  const totalValue = holdings.reduce((s, h) => s + h.ltp * h.qty, 0);
-  const totalCost = holdings.reduce((s, h) => s + h.avgCost * h.qty, 0);
-  const totalPnl = totalValue - totalCost;
+export default function Portfolio({ client, onBack }: Props) {
+  const holdings = BASE_HOLDINGS.map(h => ({
+    ...h,
+    pnl:     (h.ltp - h.avgCost) * h.qty,
+    returns: ((h.ltp - h.avgCost) / h.avgCost) * 100,
+  }));
+
+  const totalValue   = holdings.reduce((s, h) => s + h.ltp * h.qty, 0);
+  const totalCost    = holdings.reduce((s, h) => s + h.avgCost * h.qty, 0);
+  const totalPnl     = totalValue - totalCost;
   const totalReturns = (totalPnl / totalCost) * 100;
 
   const fmt = (n: number) => '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2 });
+  const fmtShort = (n: number) => {
+    if (n >= 1_00_00_000) return '₹' + (n / 1_00_00_000).toFixed(2) + 'Cr';
+    if (n >= 1_00_000)    return '₹' + (n / 1_00_000).toFixed(2) + 'L';
+    return '₹' + n.toLocaleString('en-IN');
+  };
 
+  // Build pie slices
   let cumulativeAngle = 0;
   const slices = allocation.map(a => {
-    const angle = (a.pct / 100) * 360;
+    const angle      = (a.pct / 100) * 360;
     const startAngle = cumulativeAngle;
     cumulativeAngle += angle;
     const startRad = (startAngle - 90) * (Math.PI / 180);
-    const endRad = (startAngle + angle - 90) * (Math.PI / 180);
+    const endRad   = (startAngle + angle - 90) * (Math.PI / 180);
     const x1 = 90 + 80 * Math.cos(startRad);
     const y1 = 90 + 80 * Math.sin(startRad);
     const x2 = 90 + 80 * Math.cos(endRad);
@@ -44,15 +79,65 @@ export default function Portfolio() {
 
   return (
     <>
+      {/* Header with back button */}
       <div className="dash-header">
-        <h1>Portfolio</h1>
-        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Last updated: Today 3:45 PM</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <button
+            className="btn-secondary"
+            onClick={onBack}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 14px', fontSize: 13 }}
+            id="portfolio-back-btn"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+              style={{ width: 15, height: 15 }}>
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+            Back to Clients
+          </button>
+
+          {/* Client badge */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              className="client-avatar"
+              style={{
+                background: `hsl(${(client.id * 47) % 360}, 60%, 88%)`,
+                color: `hsl(${(client.id * 47) % 360}, 50%, 30%)`,
+              }}
+            >
+              {initials(client.name)}
+            </div>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 700, lineHeight: 1.2 }}>{client.name}</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{client.email}</span>
+                <span
+                  className="risk-chip"
+                  style={{
+                    background: RISK_BG[client.risk_profile],
+                    color: RISK_COLORS[client.risk_profile],
+                    fontSize: 11,
+                    padding: '2px 8px',
+                  }}
+                >
+                  {client.risk_profile.charAt(0).toUpperCase() + client.risk_profile.slice(1)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+          AUM: <strong style={{ color: 'var(--text)' }}>{fmtShort(client.aum)}</strong>
+        </span>
       </div>
+
+      {/* Summary stats */}
       <div className="portfolio-summary">
         <div className="stat-card">
           <div className="label">Total Value</div>
           <div className="value">{fmt(totalValue)}</div>
-          <div className="sub" style={{ color: 'var(--green)' }}>+{fmt(totalPnl)} ({totalReturns.toFixed(2)}%)</div>
+          <div className="sub" style={{ color: 'var(--green)' }}>
+            +{fmt(totalPnl)} ({totalReturns.toFixed(2)}%)
+          </div>
         </div>
         <div className="stat-card">
           <div className="label">Today's P&L</div>
@@ -61,11 +146,16 @@ export default function Portfolio() {
         </div>
         <div className="stat-card">
           <div className="label">Total Returns</div>
-          <div className="value" style={{ color: 'var(--green)' }}>+{fmt(totalPnl)}</div>
-          <div className="sub" style={{ color: 'var(--green)' }}>+{totalReturns.toFixed(2)}%</div>
+          <div className="value" style={{ color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {totalPnl >= 0 ? '+' : ''}{fmt(totalPnl)}
+          </div>
+          <div className="sub" style={{ color: totalPnl >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            {totalReturns >= 0 ? '+' : ''}{totalReturns.toFixed(2)}%
+          </div>
         </div>
       </div>
 
+      {/* Holdings table */}
       <div className="card">
         <div className="section-header"><h2>Holdings</h2></div>
         <div style={{ overflowX: 'auto' }}>
@@ -108,6 +198,7 @@ export default function Portfolio() {
         </div>
       </div>
 
+      {/* Allocation pie */}
       <div className="card">
         <div className="section-header"><h2>Allocation</h2></div>
         <div className="pie-container">

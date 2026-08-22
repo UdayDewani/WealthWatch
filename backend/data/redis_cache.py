@@ -149,7 +149,34 @@ class RedisCache:
             return None
 
 
+    # ------------------------------------------------------------------
+    # Generic key helpers (used by non-market data e.g. multi-asset)
+    # ------------------------------------------------------------------
+
+    async def get(self, key: str) -> Optional[str]:
+        """Return the raw string value for *key*, or None."""
+        if not self._client:
+            return None
+        try:
+            return await self._client.get(key)
+        except Exception as exc:
+            logger.warning("Redis get(%s) failed: %s", key, exc)
+            return None
+
+    async def set(self, key: str, value: str, ex: int = 60) -> bool:
+        """Store *value* under *key* with TTL *ex* seconds."""
+        if not self._client:
+            return False
+        try:
+            await self._client.setex(key, ex, value)
+            return True
+        except Exception as exc:
+            logger.warning("Redis set(%s) failed: %s", key, exc)
+            return False
+
+
 # ---------------------------------------------------------------------------
 # Module-level singleton — imported by main.py and routes.py
 # ---------------------------------------------------------------------------
 cache = RedisCache()
+

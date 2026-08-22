@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { Client, ClientCreate, ClientUpdate } from '../api/clients';
 import { fetchClients, createClient, updateClient, deleteClient } from '../api/clients';
 import ClientModal from './ClientModal';
+import Portfolio from './Portfolio';
 
 const RISK_COLORS: Record<string, string> = {
   conservative: '#059669',
@@ -34,6 +35,7 @@ export default function Clients() {
   const [modalOpen, setModalOpen]   = useState(false);
   const [editing, setEditing]       = useState<Client | null>(null);
   const [confirmId, setConfirmId]   = useState<number | null>(null);
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -86,6 +88,11 @@ export default function Clients() {
   const openEdit = (c: Client) => { setEditing(c); setModalOpen(true); };
 
   // ── render ───────────────────────────────────────────────────────────
+  // If a client is selected → show their portfolio
+  if (selectedClient) {
+    return <Portfolio client={selectedClient} onBack={() => setSelectedClient(null)} />;
+  }
+
   return (
     <>
       {/* Page header */}
@@ -195,7 +202,12 @@ export default function Clients() {
               </thead>
               <tbody>
                 {filtered.map(c => (
-                  <tr key={c.id} className="client-row">
+                  <tr
+                    key={c.id}
+                    className="client-row"
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setSelectedClient(c)}
+                  >
                     <td>
                       <div className="stock-info">
                         <div className="client-avatar" style={{
@@ -234,11 +246,11 @@ export default function Clients() {
                     <td style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
                       {new Date(c.joined_date).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
                     </td>
-                    <td>
+                    <td onClick={e => e.stopPropagation()}>
                       <div className="action-btns">
                         <button
                           className="action-btn edit"
-                          onClick={() => openEdit(c)}
+                          onClick={(e) => { e.stopPropagation(); openEdit(c); }}
                           title="Edit client"
                           id={`edit-client-${c.id}`}
                         >
@@ -246,7 +258,7 @@ export default function Clients() {
                         </button>
                         <button
                           className="action-btn delete"
-                          onClick={() => setConfirmId(c.id)}
+                          onClick={(e) => { e.stopPropagation(); setConfirmId(c.id); }}
                           title="Delete client"
                           id={`delete-client-${c.id}`}
                         >

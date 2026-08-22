@@ -6,6 +6,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from data.upstox_client import UpstoxClient
 from data.redis_cache import RedisCache
 from data.database import StockDatabase
+from data.multi_asset_client import MultiAssetClient
 from web.ws_manager import manager
 from models.client import ClientCreate, ClientUpdate
 
@@ -16,6 +17,7 @@ _upstox_client: UpstoxClient | None = None
 _orchestrator = None  # Orchestrator — avoids circular import at module level
 _cache: RedisCache | None = None
 _db: StockDatabase | None = None
+_asset_client: MultiAssetClient | None = None
 
 
 def set_upstox_client(client: UpstoxClient) -> None:
@@ -38,6 +40,11 @@ def set_db(db: StockDatabase) -> None:
     _db = db
 
 
+def set_asset_client(client: MultiAssetClient) -> None:
+    global _asset_client
+    _asset_client = client
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -48,6 +55,50 @@ async def health():
         "status": "ok",
         "redis":  _cache.is_available if _cache else False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-asset market data (Commodities, Crypto, ETFs, MFs, Forex)
+# ---------------------------------------------------------------------------
+
+_ASSETS_CACHE_KEY = "multi_assets_snapshot"
+_ASSETS_CACHE_TTL = 60  # seconds
+
+@router.get("/api/markets/assets")
+async def markets_assets():
+    """
+    Returns live prices for commodities, crypto, ETFs, mutual funds, and forex.
+
+    Cache strategy
+    --------------
+    1. Redis hot cache (60 s TTL)
+    2. Fresh fetch from Yahoo Finance via MultiAssetClient
+    """
+    # 1. Try Redis hot cache
+    if _cache and _cache.is_available:
+        cached = await _cache.get(_ASSETS_CACHE_KEY)
+        if cached:
+            import json
+            try:
+                return json.loads(cached)
+            except Exception:
+                pass
+
+    # 2. Fetch fresh data
+    if _asset_client is None:
+        return {"error": "Asset client not initialised"}
+
+    data = await _asset_client.get_all_assets()
+
+    # 3. Store in Redis for next caller
+    if _cache and _cache.is_available:
+        import json
+        try:
+            await _cache.set(_ASSETS_CACHE_KEY, json.dumps(data), ex=_ASSETS_CACHE_TTL)
+        except Exception:
+            pass
+
+    return data
 
 
 # ---------------------------------------------------------------------------

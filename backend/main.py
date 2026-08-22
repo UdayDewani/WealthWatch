@@ -11,8 +11,8 @@ from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from agents import Orchestrator
-from data import StockDatabase, UpstoxClient, redis_cache
-from web.routes import router, set_orchestrator, set_upstox_client, set_cache, set_db
+from data import StockDatabase, UpstoxClient, redis_cache, MultiAssetClient
+from web.routes import router, set_orchestrator, set_upstox_client, set_cache, set_db, set_asset_client
 from web.ws_manager import manager
 from config import PORT, SNAPSHOT_INTERVAL_HOURS
 
@@ -25,13 +25,15 @@ logger = logging.getLogger("main")
 # ---------------------------------------------------------------------------
 # Singletons — created once at startup
 # ---------------------------------------------------------------------------
-db          = StockDatabase()
-upstox      = UpstoxClient()
+db           = StockDatabase()
+upstox       = UpstoxClient()
 orchestrator = Orchestrator(db=db)
+asset_client = MultiAssetClient()
 
 # Inject shared references into the web layer
 set_upstox_client(upstox)
 set_orchestrator(orchestrator)
+set_asset_client(asset_client)
 
 # How often the ingestor loop fires (seconds)
 ANALYSIS_INTERVAL = 60
