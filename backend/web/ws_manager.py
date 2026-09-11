@@ -1,29 +1,33 @@
-import json
-import asyncio
-from typing import Set
+"""WebSocket connection manager."""
+from __future__ import annotations
+from typing import List
 from fastapi import WebSocket
+import logging, json
 
+logger = logging.getLogger("ws_manager")
 
 class ConnectionManager:
     def __init__(self):
-        self.active: Set[WebSocket] = set()
+        self.active: List[WebSocket] = []
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
-        self.active.add(ws)
+        self.active.append(ws)
+        logger.info("WS connected — total: %d", len(self.active))
 
     def disconnect(self, ws: WebSocket):
-        self.active.discard(ws)
+        self.active = [c for c in self.active if c != ws]
+        logger.info("WS disconnected — total: %d", len(self.active))
 
-    async def broadcast(self, message: dict):
-        dead = set()
+    async def broadcast(self, data: dict):
+        dead = []
+        payload = json.dumps(data)
         for ws in self.active:
             try:
-                await ws.send_json(message)
+                await ws.send_text(payload)
             except Exception:
-                dead.add(ws)
+                dead.append(ws)
         for ws in dead:
-            self.active.discard(ws)
-
+            self.disconnect(ws)
 
 manager = ConnectionManager()

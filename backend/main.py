@@ -1,3 +1,7 @@
+"""
+WealthWatch 2.0 — Main FastAPI server.
+Starts: market ingestor loop + LangGraph analysis pipeline.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,15 +10,16 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from starlette.requests import Request
+from fastapi.middleware.cors import CORSMiddleware
 
-from agents import Orchestrator
-from data import StockDatabase, UpstoxClient, redis_cache, MultiAssetClient
-from web.routes import router, set_orchestrator, set_upstox_client, set_cache, set_db, set_asset_client
+from config import PORT, ANALYSIS_INTERVAL, SNAPSHOT_INTERVAL_HOURS
+from data.database import WealthDatabase
+from data.redis_cache import cache as redis_cache
+from agents.market_graph import run_market_analysis
+from web.routes import (router, set_db, set_cache,
+                        set_upstox, set_ws_manager, set_news_fetcher,
+                        set_langgraph, set_broadcast_fn)
 from web.ws_manager import manager
-from config import PORT, SNAPSHOT_INTERVAL_HOURS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,195 +27,190 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-# ---------------------------------------------------------------------------
-# Singletons — created once at startup
-# ---------------------------------------------------------------------------
-db           = StockDatabase()
-upstox       = UpstoxClient()
-orchestrator = Orchestrator(db=db)
-asset_client = MultiAssetClient()
+# ── Singletons ────────────────────────────────────────────────────────────
+db           = WealthDatabase()
 
-# Inject shared references into the web layer
-set_upstox_client(upstox)
-set_orchestrator(orchestrator)
-set_asset_client(asset_client)
+# Optional — only if keys are set
+_upstox = None
+_news_fetcher = None
 
-# How often the ingestor loop fires (seconds)
-ANALYSIS_INTERVAL = 60
+try:
+    from data.upstox_client import UpstoxClient
+    _upstox = UpstoxClient()
+except Exception as e:
+    logger.warning("Upstox client init failed: %s", e)
+
+try:
+    from data.yahoo_fetcher import NewsFetcher
+    _news_fetcher = NewsFetcher()
+except Exception as e:
+    logger.warning("News fetcher init failed: %s", e)
 
 
-# ---------------------------------------------------------------------------
-# Ingestor loop
-# ---------------------------------------------------------------------------
+# ── Market ingestor loop ──────────────────────────────────────────────────
 
 async def ingestor_loop() -> None:
-    """
-    Runs every ANALYSIS_INTERVAL seconds (60 s).
-
-    Responsibilities
-    ----------------
-    1. Fetch live market data from Upstox (the ONLY place this happens).
-    2. Write the raw snapshot to Redis (hot cache, TTL 90 s) — every tick.
-    3. Fetch market news + run Gemini AI analysis.
-    4. Write the full broadcast payload to Redis (hot cache) — every tick.
-    5. Persist raw snapshot + AI analysis to SQLite — once per hour.
-    6. Broadcast the full payload to all connected WebSocket clients.
-
-    All consumers (REST routes, LLM agents) read from Redis → SQLite.
-    They never call the Upstox API directly.
-    """
-    await asyncio.sleep(3)  # let the server finish startup
-
-    # Track when we last wrote to SQLite (hourly cadence)
-    last_sqlite_write: datetime | None = None
+    await asyncio.sleep(1)
+    last_sqlite: datetime | None = None
 
     while True:
         try:
             now = datetime.utcnow()
 
-            # ----------------------------------------------------------------
-            # Auth guard
-            # ----------------------------------------------------------------
-            if not upstox.access_token:
-                logger.warning("No Upstox token — broadcasting auth_required.")
-                auth_payload = {
-                    "auth_required": True,
-                    "auth_url":      upstox.build_auth_url(),
-                    "message":       "Please authorize Upstox to see live market data.",
-                    "timestamp":     now.isoformat(),
-                }
-                await manager.broadcast(auth_payload)
-                await asyncio.sleep(ANALYSIS_INTERVAL)
-                continue
+            # Fetch news
+            news = []
+            if _news_fetcher:
+                try:
+                    news = await _news_fetcher.fetch_market_news()
+                except Exception:
+                    pass
 
-            # ----------------------------------------------------------------
-            # Step 1 — Fetch live prices from Upstox (single API call)
-            # ----------------------------------------------------------------
-            upstox_data = await upstox.get_live_index_data()
+            # Fetch live Upstox data
+            upstox_data = {}
+            if _upstox and getattr(_upstox, "access_token", None):
+                try:
+                    upstox_data = await _upstox.get_live_index_data() or {}
+                except Exception as e:
+                    logger.warning("Upstox fetch failed: %s", e)
 
-            if not upstox_data:
-                logger.warning("Upstox returned no data — token may be expired.")
-                auth_payload = {
-                    "auth_required": True,
-                    "auth_url":      upstox.build_auth_url(),
-                    "message":       "Upstox token expired. Please re-authorize.",
-                    "timestamp":     now.isoformat(),
-                }
-                await manager.broadcast(auth_payload)
-                await asyncio.sleep(ANALYSIS_INTERVAL)
-                continue
-
-            # ----------------------------------------------------------------
-            # Step 2 — Write raw snapshot to Redis (every 60 s)
-            # ----------------------------------------------------------------
-            snapshot_payload = {
-                "indices":   upstox_data.get("indices", {}),
-                "stocks":    upstox_data.get("stocks", {}),
+            market_data = {
+                "indices": upstox_data.get("indices", {}),
+                "stocks":  upstox_data.get("stocks", {}),
+                "news":    news,
                 "timestamp": now.isoformat(),
             }
-            await redis_cache.set_snapshot(snapshot_payload)
 
-            # ----------------------------------------------------------------
-            # Step 3 — Run full AI pipeline via Orchestrator
-            # ----------------------------------------------------------------
-            broadcast_data = await orchestrator.run_pipeline(upstox_data)
+            # Run LangGraph analysis
+            analysis = await run_market_analysis(market_data, news)
 
-            # ----------------------------------------------------------------
-            # Step 4 — Write full broadcast to Redis (every 60 s)
-            # ----------------------------------------------------------------
-            await redis_cache.set_broadcast(broadcast_data)
+            broadcast = {
+                "auth_required": not bool(_upstox and getattr(_upstox, "access_token", None)),
+                **market_data,
+                "nifty":   market_data["indices"].get("nifty"),
+                "sensex":  market_data["indices"].get("sensex"),
+                "analysis": analysis,
+                "summary":  analysis.get("summary", ""),
+            }
 
-            # ----------------------------------------------------------------
-            # Step 5 — Persist to SQLite (once per hour)
-            # ----------------------------------------------------------------
-            hours_since_last = (
-                (now - last_sqlite_write).total_seconds() / 3600
-                if last_sqlite_write else float("inf")
-            )
+            # Redis
+            await redis_cache.set_broadcast(broadcast)
+            await redis_cache.set_snapshot({"indices": market_data["indices"],
+                                             "stocks": market_data["stocks"],
+                                             "timestamp": now.isoformat()})
 
-            if hours_since_last >= SNAPSHOT_INTERVAL_HOURS:
-                ts = now.isoformat()
+            # SQLite hourly
+            hours_since = (now - last_sqlite).total_seconds() / 3600 if last_sqlite else float("inf")
+            if hours_since >= SNAPSHOT_INTERVAL_HOURS:
                 try:
-                    await db.save_market_snapshot(
-                        indices=upstox_data.get("indices", {}),
-                        stocks=upstox_data.get("stocks", {}),
-                        captured_at=ts,
-                    )
-                    analysis = broadcast_data.get("analysis", {})
-                    if analysis:
-                        await db.save_market_analysis(analysis=analysis, analyzed_at=ts)
-                    last_sqlite_write = now
-                    logger.info("Hourly SQLite snapshot written at %s", ts)
-                except Exception as db_exc:
-                    logger.error("SQLite write failed: %s", db_exc)
+                    await db.save_market_snapshot(market_data["indices"], market_data["stocks"], now.isoformat())
+                    await db.save_market_analysis(analysis, now.isoformat())
+                    last_sqlite = now
+                except Exception as e:
+                    logger.error("SQLite write failed: %s", e)
 
-            # ----------------------------------------------------------------
-            # Step 6 — Broadcast to all WebSocket clients
-            # ----------------------------------------------------------------
-            await manager.broadcast(broadcast_data)
+            # Broadcast WebSocket
+            await manager.broadcast(broadcast)
 
-            logger.info(
-                "Tick complete — Nifty=%.2f  Sensex=%.2f  Redis=%s",
-                (broadcast_data.get("nifty") or {}).get("price", 0),
-                (broadcast_data.get("sensex") or {}).get("price", 0),
-                "ok" if redis_cache.is_available else "offline",
-            )
+            logger.info("Tick — Nifty=%s  Sensex=%s  Redis=%s",
+                        (market_data["indices"].get("nifty") or {}).get("price", "—"),
+                        (market_data["indices"].get("sensex") or {}).get("price", "—"),
+                        "ok" if redis_cache.is_available else "offline")
 
-        except Exception as exc:
-            logger.error("Ingestor loop error: %s", exc, exc_info=True)
+        except Exception as e:
+            logger.error("Ingestor error: %s", e, exc_info=True)
 
         await asyncio.sleep(ANALYSIS_INTERVAL)
 
 
-# ---------------------------------------------------------------------------
-# FastAPI lifespan
-# ---------------------------------------------------------------------------
+async def broadcast_once() -> None:
+    """Run a single ingestor tick immediately — used after Upstox auth."""
+    try:
+        now = datetime.utcnow()
+        news = []
+        if _news_fetcher:
+            try:
+                news = await _news_fetcher.fetch_market_news()
+            except Exception:
+                pass
+
+        upstox_data = {}
+        if _upstox and getattr(_upstox, "access_token", None):
+            try:
+                upstox_data = await _upstox.get_live_index_data() or {}
+            except Exception as e:
+                logger.warning("broadcast_once: Upstox fetch failed: %s", e)
+
+        market_data = {
+            "indices": upstox_data.get("indices", {}),
+            "stocks":  upstox_data.get("stocks", {}),
+            "news":    news,
+            "timestamp": now.isoformat(),
+        }
+        analysis = await run_market_analysis(market_data, news)
+        broadcast = {
+            "auth_required": False,
+            **market_data,
+            "nifty":   market_data["indices"].get("nifty"),
+            "sensex":  market_data["indices"].get("sensex"),
+            "analysis": analysis,
+            "summary":  analysis.get("summary", ""),
+        }
+        await redis_cache.set_broadcast(broadcast)
+        await manager.broadcast(broadcast)
+        logger.info("broadcast_once complete — Nifty=%s",
+                    (market_data["indices"].get("nifty") or {}).get("price", "—"))
+    except Exception as e:
+        logger.error("broadcast_once failed: %s", e)
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Connect Redis
     await redis_cache.connect()
 
-    # Inject cache + db into routes
-    set_cache(redis_cache)
-    set_db(db)
-
-    # Initialise SQLite
+    # Init DB
     await db.initialize()
-    logger.info("Database ready.")
 
-    # Start the background ingestor loop
+    # Inject into routes
+    set_db(db)
+    set_cache(redis_cache)
+    set_upstox(_upstox)
+    set_ws_manager(manager)
+    set_news_fetcher(_news_fetcher)
+    set_langgraph(run_market_analysis)
+    set_broadcast_fn(broadcast_once)
+
+    # Start ingestor
     task = asyncio.create_task(ingestor_loop())
-    logger.info("Ingestor loop started (interval=%ds, SQLite every %dh).",
-                ANALYSIS_INTERVAL, SNAPSHOT_INTERVAL_HOURS)
+    logger.info("WealthWatch 2.0 started — ingestor interval=%ds", ANALYSIS_INTERVAL)
 
-    yield  # app is running
+    yield
 
-    # Graceful shutdown
     task.cancel()
     try:
         await task
     except asyncio.CancelledError:
         pass
     await redis_cache.disconnect()
+    await db.close()
     logger.info("Shutdown complete.")
 
 
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
+# ── App ───────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="StockSense AI", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app = FastAPI(title="WealthWatch 2.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5000", "http://localhost:4040"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(router)
-
-templates = Jinja2Templates(directory="web/templates")
-
-
-@app.get("/")
-async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
 
 if __name__ == "__main__":
     import uvicorn

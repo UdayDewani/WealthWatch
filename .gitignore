@@ -1,32 +1,30 @@
-# Environment and credentials
-.env
-.env.*
-*.env
-upstox_token.json
-
-# Databases
-*.db
-*.sqlite3
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-env/
-ENV/
-
-# Node / Frontend
+# Dependencies
 node_modules/
-dist/
-dist-ssr/
+frontend/node_modules/
+backend/__pycache__/
+*.pyc
 
-# Logs
-*.log
-logs/
+# Next.js build & dev outputs
+.next/
+frontend/.next/
+frontend/out/
 
-# Operating System & IDE
+# Environment files
+.env
+.env*.local
+backend/.env
+
+# SQLite databases & temp files
+*.db
+*.db-shm
+*.db-wal
+backend/wealthwatch.db*
+
+# Backup & temporary archives
+frontend_old_vite_backup/
+*.zip
+
+# System & IDE files
 .DS_Store
-Thumbs.db
 .vscode/
 .idea/
