@@ -1,6 +1,8 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { Sparkles } from 'lucide-react'
 import { Delta } from '@/components/delta'
 import { ValueChart } from '@/components/value-chart'
 import { formatNumber, formatPercent, formatCurrency } from '@/lib/format'
@@ -82,6 +84,13 @@ export function InstrumentDetail({
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">{inst.name}</p>
         </div>
+        <Link
+          href={`/manager/stock-analysis?symbol=${encodeURIComponent(inst.symbol)}`}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/10 hover:bg-primary/15 text-primary px-3 py-1.5 text-xs font-medium transition shadow-2xs"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>Analyze for Clients</span>
+        </Link>
       </div>
 
       <div className="flex items-end justify-between">

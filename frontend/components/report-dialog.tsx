@@ -52,7 +52,14 @@ export function ReportDialog({
         typeof window !== 'undefined'
           ? window.localStorage.getItem('ww-token')
           : null
-      const res = await fetch('/api/client/me/request-report', {
+
+      // If clientId is provided, this is a WM triggering a report for their client.
+      // WM tokens are rejected by the client-only endpoint → use the WM endpoint instead.
+      const url = clientId
+        ? `/api/clients/${clientId}/request-report`
+        : '/api/client/me/request-report'
+
+      const res = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -60,11 +67,11 @@ export function ReportDialog({
         },
       })
       // 202 Accepted or 200 OK both mean success
-      if (!res.ok && res.status !== 202) throw new Error('API error')
+      if (!res.ok && res.status !== 202) throw new Error(`API error ${res.status}`)
       setStage('done')
-    } catch {
-      // Fallback: show success so UI doesn't break when called from WM context
-      setTimeout(() => setStage('done'), 600)
+    } catch (err) {
+      console.error('Report request failed:', err)
+      setStage('form') // Go back to form so user knows it failed
     }
   }
 

@@ -17,7 +17,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 # Gemini
 GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL    = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL    = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
 
 # OpenAI (optional — available for future use)
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
@@ -34,3 +35,9 @@ JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", 24))
 # Data refresh
 SNAPSHOT_INTERVAL_HOURS = int(os.getenv("SNAPSHOT_INTERVAL_HOURS", 1))
 ANALYSIS_INTERVAL       = int(os.getenv("ANALYSIS_INTERVAL", 60))
+
+# News — SearXNG + Firecrawl pipeline
+SEARXNG_BASE    = os.getenv("SEARXNG_BASE",    "https://search.mycilo.app/search")
+FIRECRAWL_BASE  = os.getenv("FIRECRAWL_BASE",  "https://firecrawl.mycilo.app")
+FIRECRAWL_KEY   = os.getenv("FIRECRAWL_API_KEY", "")   # leave blank for self-hosted
+

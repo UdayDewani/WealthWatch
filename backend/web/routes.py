@@ -16,6 +16,7 @@ Sections:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -226,6 +227,11 @@ async def add_deposit(body: DepositCreate, wm=Depends(require_wm)):
 
 @router.delete("/api/deposits/{deposit_id}")
 async def delete_deposit(deposit_id: int, client_id: int, wm=Depends(require_wm)):
+    wm_id = int(wm["sub"])
+    # Verify client belongs to this WM before mutating
+    client = await _db.get_client_by_id(client_id, wm_id)
+    if not client:
+        raise HTTPException(403, "Access denied: client does not belong to this account")
     await _db.delete_deposit(deposit_id, client_id)
     return {"message": "Deleted"}
 
@@ -250,6 +256,10 @@ async def add_investment(body: InvestmentCreate, wm=Depends(require_wm)):
 
 @router.post("/api/investments/{inv_id}/close")
 async def close_investment(inv_id: int, body: CloseInvestment, client_id: int, wm=Depends(require_wm)):
+    wm_id = int(wm["sub"])
+    client = await _db.get_client_by_id(client_id, wm_id)
+    if not client:
+        raise HTTPException(403, "Access denied: client does not belong to this account")
     await _db.close_investment(
         inv_id, client_id,
         sell_price=body.sell_price,
@@ -260,6 +270,10 @@ async def close_investment(inv_id: int, body: CloseInvestment, client_id: int, w
 
 @router.delete("/api/investments/{inv_id}")
 async def delete_investment(inv_id: int, client_id: int, wm=Depends(require_wm)):
+    wm_id = int(wm["sub"])
+    client = await _db.get_client_by_id(client_id, wm_id)
+    if not client:
+        raise HTTPException(403, "Access denied: client does not belong to this account")
     await _db.delete_investment(inv_id, client_id)
     return {"message": "Deleted"}
 
@@ -306,10 +320,14 @@ async def _build_portfolio(client_id: int) -> dict:
     total_invested_cost = sum(i["quantity"] * i["buy_price"] for i in open_inv)
     available_cash      = total_deposited - total_invested_cost
 
-    # Enrich open investments with live prices
+    # Fetch all live prices in parallel (was sequential, O(N * 5s) → now ~5s flat)
+    import asyncio as _asyncio
+    prices = await _asyncio.gather(
+        *[_get_live_price(inv["symbol"]) for inv in open_inv]
+    )
+
     enriched_open = []
-    for inv in open_inv:
-        current_price = await _get_live_price(inv["symbol"])
+    for inv, current_price in zip(open_inv, prices):
         cost          = inv["quantity"] * inv["buy_price"]
         current_value = inv["quantity"] * current_price if current_price else cost
         pnl           = current_value - cost
@@ -351,7 +369,10 @@ async def _build_portfolio(client_id: int) -> dict:
 
 @router.get("/api/client/me")
 async def client_me(cl=Depends(require_client)):
-    client = await _db.get_client_by_email(cl.get("email", ""))
+    # Client JWT payload: {sub: str(client_id), role: "client", wm_id: int}
+    # There is no "email" in the payload — look up by primary key instead.
+    client_id = int(cl["sub"])
+    client = await _db.get_client_by_id_only(client_id)
     if client:
         client.pop("password_hash", None)
     return client or {}
@@ -395,6 +416,38 @@ async def get_my_reports(cl=Depends(require_client)):
     """Return this client's report job history."""
     client_id = int(cl["sub"])
     return await _db.get_report_jobs(client_id, limit=10)
+
+
+@router.post("/api/clients/{client_id}/request-report", status_code=202)
+async def wm_request_report(client_id: int, wm=Depends(require_wm)):
+    """
+    Wealth Manager triggers a portfolio report for one of their clients.
+    Reuses the same background pipeline as the client self-service endpoint.
+    """
+    wm_id = int(wm["sub"])
+
+    # Verify the client belongs to this WM
+    client_row = await _db.get_client_by_id(client_id, wm_id)
+    if not client_row:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Prevent spamming: block if a job is already pending/generating
+    existing_jobs = await _db.get_report_jobs(client_id, limit=1)
+    if existing_jobs and existing_jobs[0]["status"] in ("pending", "generating"):
+        return {
+            "job_id":  existing_jobs[0]["id"],
+            "status":  existing_jobs[0]["status"],
+            "message": "A report is already being generated. Please wait.",
+        }
+
+    import asyncio
+    job_id = await _db.create_report_job(client_id)
+    asyncio.create_task(_generate_and_send_report(job_id, client_id))
+    return {
+        "job_id":  job_id,
+        "status":  "pending",
+        "message": f"Report for {client_row.get('name', 'client')} is being generated and will be emailed shortly.",
+    }
 
 
 async def _generate_and_send_report(job_id: int, client_id: int) -> None:
@@ -458,9 +511,17 @@ async def _generate_and_send_report(job_id: int, client_id: int) -> None:
             except Exception:
                 pass
 
-        # Latest news
+        # Latest news — prefer Redis-cached broadcast data to avoid re-running
+        # the expensive SearXNG + Firecrawl + Gemini pipeline (up to 28s).
         news: list = []
-        if _news_fetcher:
+        if _cache and _cache.is_available:
+            try:
+                broadcast = await _cache.get_broadcast()
+                if broadcast:
+                    news = broadcast.get("news", [])
+            except Exception:
+                pass
+        if not news and _news_fetcher:
             try:
                 news = await _news_fetcher.fetch_market_news()
             except Exception:
@@ -558,7 +619,13 @@ async def multi_asset_data():
 
 @router.get("/api/markets/stocks/{symbol}/news")
 async def stock_news(symbol: str, wm=Depends(require_wm)):
-    """Return an Upstox-only news feed and an AI summary for one NSE stock."""
+    """
+    Return an Upstox-only news feed and an AI summary for one NSE stock.
+    Upstox articles are fetched live (they are personalised per watchlist).
+    The AI summary is shared via Redis (SUMMARY_TTL=15 min) — it describes
+    general market conditions and NEVER contains client-specific data.
+    """
+    from data.redis_cache import SUMMARY_TTL, LOCK_RETRIES, LOCK_POLL_SECONDS
     if not _upstox:
         raise HTTPException(503, "Upstox is not configured")
     try:
@@ -570,8 +637,54 @@ async def stock_news(symbol: str, wm=Depends(require_wm)):
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
 
-    from agents.market_graph import summarize_stock_news
-    result["summary"] = await summarize_stock_news(symbol.upper(), result["articles"])
+    sym = symbol.upper()
+    lock_resource = f"summary:NSE:{sym}"
+
+    # ── Check summary cache first ─────────────────────────────────────────
+    if _cache and _cache.is_available:
+        cached_sum = await _cache.get_summary(sym)
+        if cached_sum:
+            result["summary"] = cached_sum["summary"]
+            result["summary_cached_at"] = cached_sum.get("generated_at")
+            return result
+
+    # ── Acquire lock to prevent parallel LLM calls ────────────────────────
+    lock_token = ""
+    if _cache and _cache.is_available:
+        acquired, lock_token = await _cache.acquire_lock(lock_resource)
+        if not acquired:
+            logger.info("Summary %s: lock contention — waiting", sym)
+            for _ in range(LOCK_RETRIES):
+                await asyncio.sleep(LOCK_POLL_SECONDS)
+                cached_sum = await _cache.get_summary(sym)
+                if cached_sum:
+                    result["summary"] = cached_sum["summary"]
+                    return result
+            logger.warning("Summary %s: lock wait timed out — generating independently", sym)
+
+    # ── Double-check after acquiring lock ─────────────────────────────────
+    if lock_token and _cache and _cache.is_available:
+        cached_sum = await _cache.get_summary(sym)
+        if cached_sum:
+            await _cache.release_lock(lock_resource, lock_token)
+            result["summary"] = cached_sum["summary"]
+            return result
+
+    # ── Generate summary ──────────────────────────────────────────────────
+    try:
+        from agents.market_graph import summarize_stock_news
+        summary_text = await summarize_stock_news(sym, result.get("articles", []))
+        result["summary"] = summary_text
+
+        # Cache the generated summary (general market conditions only)
+        if summary_text and _cache and _cache.is_available:
+            from data.news_fetcher import _sentiment as _detect_sentiment
+            sentiment = _detect_sentiment(summary_text)
+            await _cache.set_summary(sym, summary_text, sentiment=sentiment, ttl=SUMMARY_TTL)
+    finally:
+        if lock_token and _cache and _cache.is_available:
+            await _cache.release_lock(lock_resource, lock_token)
+
     return result
 
 @router.post("/api/market/trigger-analysis")
@@ -635,36 +748,172 @@ async def analysis_history(wm=Depends(require_wm)):
 
 @router.get("/api/news")
 async def get_market_news():
-    """Return latest Yahoo Finance market news headlines."""
+    """
+    Return latest Indian market news via SearXNG + Firecrawl + LLM.
+    Results are cached in Redis for 15 minutes (NEWS_TTL).
+    Concurrent requests share one fetch via distributed lock.
+    """
+    from data.redis_cache import NEWS_TTL, LOCK_RETRIES, LOCK_POLL_SECONDS
+    MARKET_KEY = "MARKET"
+
+    # ── 1. Cache check ────────────────────────────────────────────────────
+    if _cache and _cache.is_available:
+        cached = await _cache.get_news(MARKET_KEY)
+        if cached:
+            return {
+                "articles":  cached.get("articles", []),
+                "source":    "cache",
+                "available": True,
+                "cached_at": cached.get("cached_at"),
+            }
+
     if not _news_fetcher:
-        return {"articles": [], "source": "yahoo", "available": False}
+        return {"articles": [], "source": "searxng", "available": False}
+
+    # ── 2. Acquire distributed lock (stampede protection) ─────────────────
+    lock_token = ""
+    if _cache and _cache.is_available:
+        acquired, lock_token = await _cache.acquire_lock(f"news:{MARKET_KEY}")
+        if not acquired:
+            # Another request is already fetching — poll until it finishes
+            logger.info("Market news: lock contention — waiting for concurrent fetch")
+            for _ in range(LOCK_RETRIES):
+                await asyncio.sleep(LOCK_POLL_SECONDS)
+                cached = await _cache.get_news(MARKET_KEY)
+                if cached:
+                    return {
+                        "articles":  cached.get("articles", []),
+                        "source":    "cache",
+                        "available": True,
+                        "cached_at": cached.get("cached_at"),
+                    }
+            # Gave up waiting — fall through to fetch (safe, not ideal)
+            logger.warning("Market news: lock wait timed out — fetching independently")
+
+    # ── 3. Double-check after acquiring lock ──────────────────────────────
+    if lock_token and _cache and _cache.is_available:
+        cached = await _cache.get_news(MARKET_KEY)
+        if cached:
+            await _cache.release_lock(f"news:{MARKET_KEY}", lock_token)
+            return {
+                "articles":  cached.get("articles", []),
+                "source":    "cache",
+                "available": True,
+                "cached_at": cached.get("cached_at"),
+            }
+
+    # ── 4. Fetch from provider ────────────────────────────────────────────
+    articles: list = []
     try:
         articles = await _news_fetcher.fetch_market_news()
-        return {"articles": articles, "source": "yahoo", "available": True}
     except Exception as e:
-        logger.error("News fetch error: %s", e)
-        return {"articles": [], "source": "yahoo", "available": False}
+        logger.error("Market news error: %s", e)
+    finally:
+        if lock_token and _cache and _cache.is_available:
+            await _cache.release_lock(f"news:{MARKET_KEY}", lock_token)
+
+    # ── 5. Cache only non-empty, successful results ───────────────────────
+    if articles and _cache and _cache.is_available:
+        summary = articles[0].get("summary", "") if articles else ""
+        await _cache.set_news(articles, MARKET_KEY, exchange="MARKET", summary=summary, ttl=NEWS_TTL)
+
+    return {"articles": articles, "source": "searxng", "available": bool(articles)}
 
 
 @router.get("/api/news/{symbol}")
-async def get_stock_news_yahoo(symbol: str):
-    """Return Yahoo Finance news for a specific stock symbol."""
+async def get_stock_news(symbol: str):
+    """
+    Return stock news for a symbol via SearXNG + Firecrawl + Gemini summary.
+    Results are shared across all authenticated users via Redis (NEWS_TTL=15 min).
+    Concurrent requests for the same symbol share one fetch via distributed lock.
+    Never caches empty results or provider errors.
+    """
+    from data.redis_cache import NEWS_TTL, SUMMARY_TTL, LOCK_RETRIES, LOCK_POLL_SECONDS
+    sym = symbol.upper()
+    lock_resource = f"news:NSE:{sym}"
+
+    # ── 1. Cache check ────────────────────────────────────────────────────
+    if _cache and _cache.is_available:
+        cached = await _cache.get_news(sym)
+        if cached:
+            return {
+                "articles":  cached.get("articles", []),
+                "symbol":    sym,
+                "summary":   cached.get("summary", ""),
+                "available": True,
+                "cached_at": cached.get("cached_at"),
+                "source":    "cache",
+            }
+
     if not _news_fetcher:
-        return {"articles": [], "symbol": symbol, "summary": "", "available": False}
-    try:
-        articles = await _news_fetcher.fetch_stock_news(symbol.upper())
-    except Exception:
-        articles = []
+        return {"articles": [], "symbol": sym, "summary": "", "available": False}
 
-    # Try to get AI summary
+    # ── 2. Acquire distributed lock (stampede protection) ─────────────────
+    lock_token = ""
+    if _cache and _cache.is_available:
+        acquired, lock_token = await _cache.acquire_lock(lock_resource)
+        if not acquired:
+            logger.info("Stock news %s: lock contention — waiting for concurrent fetch", sym)
+            for _ in range(LOCK_RETRIES):
+                await asyncio.sleep(LOCK_POLL_SECONDS)
+                cached = await _cache.get_news(sym)
+                if cached:
+                    return {
+                        "articles":  cached.get("articles", []),
+                        "symbol":    sym,
+                        "summary":   cached.get("summary", ""),
+                        "available": True,
+                        "cached_at": cached.get("cached_at"),
+                        "source":    "cache",
+                    }
+            logger.warning("Stock news %s: lock wait timed out — fetching independently", sym)
+
+    # ── 3. Double-check after acquiring lock ──────────────────────────────
+    if lock_token and _cache and _cache.is_available:
+        cached = await _cache.get_news(sym)
+        if cached:
+            await _cache.release_lock(lock_resource, lock_token)
+            return {
+                "articles":  cached.get("articles", []),
+                "symbol":    sym,
+                "summary":   cached.get("summary", ""),
+                "available": True,
+                "cached_at": cached.get("cached_at"),
+                "source":    "cache",
+            }
+
+    # ── 4. Fetch from provider ────────────────────────────────────────────
+    articles: list = []
+    try:
+        articles = await _news_fetcher.fetch_stock_news(sym)
+    except Exception as exc:
+        logger.error("Stock news error for %s: %s", sym, exc)
+    finally:
+        if lock_token and _cache and _cache.is_available:
+            await _cache.release_lock(lock_resource, lock_token)
+
+    # ── 5. Extract summary (attached to articles[0] by the pipeline) ──────
     summary = ""
-    try:
-        from agents.market_graph import summarize_stock_news
-        summary = await summarize_stock_news(symbol.upper(), articles)
-    except Exception:
-        pass
+    if articles:
+        summary = articles[0].pop("summary", "")
 
-    return {"articles": articles, "symbol": symbol.upper(), "summary": summary, "available": True}
+    # ── 6. Cache only non-empty, validated results ────────────────────────
+    if articles and _cache and _cache.is_available:
+        await _cache.set_news(articles, sym, exchange="NSE", summary=summary, ttl=NEWS_TTL)
+        # Also populate the summary-only cache so stock_news (Upstox) can reuse it
+        if summary:
+            from data.news_fetcher import _sentiment as _detect_sentiment
+            sentiment = _detect_sentiment(summary)
+            await _cache.set_summary(sym, summary, sentiment=sentiment, ttl=SUMMARY_TTL)
+
+    return {
+        "articles":  articles,
+        "symbol":    sym,
+        "summary":   summary,
+        "available": bool(articles),
+        "source":    "searxng",
+    }
+
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -727,6 +976,75 @@ async def delete_my_goal(goal_id: int, cl=Depends(require_client)):
     client_id = int(cl["sub"])
     await _db.delete_goal(goal_id, client_id)
     return {"message": "Goal deleted"}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# WEALTH MANAGER STOCK ANALYSIS (Phase 3)
+# ══════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/wm/stock-analysis/{symbol}")
+async def wm_stock_analysis(symbol: str, exchange: str = "NSE", wm=Depends(require_wm)):
+    """
+    Wealth Manager Dashboard: Analyze a stock across all authorized client portfolios.
+
+    Security:
+    - wm_id is extracted from the verified JWT (require_wm dependency), never from the request.
+    - Client data is retrieved using wm_id-scoped DB queries (IDOR-safe).
+    - Returns only client data belonging to this authenticated WM.
+    - Shared Redis cache is used for general market intelligence only;
+      client-specific assessments are never cached in the shared store.
+
+    Returns:
+    - Market summary and sentiment for the selected stock
+    - Relevant news articles with source URLs (no invented citations)
+    - Per-client relevance scores and grounded explanations
+    - Counts by relevance category
+    """
+    wm_id = int(wm["sub"])
+
+    import re as _re
+    sym = symbol.strip().upper().replace(".NS", "").replace(".BO", "")
+    if not sym or not _re.match(r'^[A-Z0-9&._-]{1,30}$', sym):
+        raise HTTPException(status_code=422, detail=f"Invalid stock symbol: '{symbol}'")
+
+    exchange_clean = exchange.strip().upper()
+    if exchange_clean not in ("NSE", "BSE", "CRYPTO", "GLOBAL"):
+        exchange_clean = "NSE"
+
+    logger.info(
+        "WM stock analysis request: wm_id=%d symbol=%s exchange=%s",
+        wm_id, sym, exchange_clean,
+    )
+
+    try:
+        from agents.wealth_manager_graph import run_wm_stock_analysis
+        result = await run_wm_stock_analysis(
+            symbol=sym,
+            wm_id=wm_id,
+            db=_db,
+            cache=_cache,
+            news_fetcher=_news_fetcher,
+            exchange=exchange_clean,
+        )
+    except Exception as exc:
+        logger.error("WM stock analysis endpoint failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Analysis workflow failed")
+
+    if isinstance(result, dict) and "error" in result and not result.get("client_analysis"):
+        detail = result["error"]
+        if "Invalid stock symbol" in detail:
+            raise HTTPException(status_code=422, detail=detail)
+        raise HTTPException(status_code=500, detail=detail)
+
+    logger.info(
+        "WM stock analysis completed: wm_id=%d symbol=%s clients=%d high=%d moderate=%d",
+        wm_id, sym,
+        result.get("client_analysis", {}).get("total_clients", 0),
+        result.get("client_analysis", {}).get("high_relevance", 0),
+        result.get("client_analysis", {}).get("moderate_relevance", 0),
+    )
+
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════

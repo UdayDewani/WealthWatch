@@ -41,10 +41,11 @@ except Exception as e:
     logger.warning("Upstox client init failed: %s", e)
 
 try:
-    from data.yahoo_fetcher import NewsFetcher
+    from data.news_fetcher import NewsFetcher
     _news_fetcher = NewsFetcher()
 except Exception as e:
     logger.warning("News fetcher init failed: %s", e)
+
 
 
 # ── Market ingestor loop ──────────────────────────────────────────────────
@@ -214,4 +215,10 @@ app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=PORT,
+        reload=True,
+        timeout_keep_alive=90,   # news pipeline can take ~25-30s
+    )

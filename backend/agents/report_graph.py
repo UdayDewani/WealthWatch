@@ -199,7 +199,16 @@ def generate_report(state: ReportState) -> ReportState:
             SystemMessage(content="You are a professional financial advisor. Always respond with valid JSON only."),
             HumanMessage(content=prompt),
         ])
-        raw = response.content.strip()
+        # gemini-3.6-flash returns content as a list of blocks; extract text robustly
+        content = response.content
+        if isinstance(content, list):
+            raw = " ".join(
+                part["text"] if isinstance(part, dict) else str(part)
+                for part in content
+                if not isinstance(part, dict) or part.get("type") == "text"
+            ).strip()
+        else:
+            raw = str(content).strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.lower().startswith("json"):

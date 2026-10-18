@@ -1,10 +1,9 @@
 'use client'
 
-import { FileText, LogOut } from 'lucide-react'
+import { LogOut } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { ReportDialog } from '@/components/report-dialog'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Wordmark } from '@/components/wordmark'
 import { cn } from '@/lib/utils'
@@ -24,16 +23,16 @@ function initials(name: string) {
 export function TopNav({
   nav,
   session,
-  reportSubject,
+  reportSubject: _reportSubject,
 }: {
   nav: NavItem[]
   session: Session | null
-  reportSubject: string
+  /** @deprecated Reports are now generated per-client from the client detail page. */
+  reportSubject?: string
 }) {
   const pathname = usePathname()
   const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [reportOpen, setReportOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const name = session?.name ?? 'Guest'
@@ -51,7 +50,6 @@ export function TopNav({
 
   function isActive(href: string) {
     if (href === pathname) return true
-    // treat sub-routes as active for the section root, but keep exact roots exact
     return false
   }
 
@@ -94,14 +92,6 @@ export function TopNav({
           </div>
 
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setReportOpen(true)}
-              className="hidden h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline-flex"
-            >
-              <FileText className="size-3.5 text-muted-foreground" />
-              Report
-            </button>
             <ThemeToggle />
 
             <div ref={menuRef} className="relative">
@@ -130,20 +120,6 @@ export function TopNav({
                     <p className="truncate text-xs text-muted-foreground">
                       {email}
                     </p>
-                  </div>
-                  <div className="p-1 sm:hidden">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setMenuOpen(false)
-                        setReportOpen(true)
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-surface"
-                    >
-                      <FileText className="size-4 text-muted-foreground" />
-                      Generate report
-                    </button>
                   </div>
                   <div className="p-1">
                     <button
@@ -184,13 +160,6 @@ export function TopNav({
           ))}
         </nav>
       </header>
-
-      <ReportDialog
-        open={reportOpen}
-        onClose={() => setReportOpen(false)}
-        subjectLabel={reportSubject}
-        defaultEmail={email || 'you@example.com'}
-      />
     </>
   )
 }

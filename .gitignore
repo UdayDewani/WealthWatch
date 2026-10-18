@@ -28,3 +28,6 @@ frontend_old_vite_backup/
 .DS_Store
 .vscode/
 .idea/
+.pytest_cache/
+*.tsbuildinfo
+graphify-out/

@@ -1,4 +1,4 @@
-﻿/** @type {import('next').NextConfig} */
+/** @type {import('next').NextConfig} */
 const nextConfig = {
   async rewrites() {
     return [
@@ -23,6 +23,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Give the news pipeline (SearXNG + Firecrawl + LLM) enough time
+  experimental: {
+    proxyTimeout: 60_000,  // 60 s — news scraping takes ~25-30s
+  },
   async headers() {
     return [
       {
@@ -42,3 +46,4 @@ const nextConfig = {
 }
 
 export default nextConfig
+

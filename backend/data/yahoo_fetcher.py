@@ -96,9 +96,30 @@ class NewsFetcher:
         }
 
     def _fetch_stock_sync(self, symbol: str) -> list[dict[str, Any]]:
-        ticker = self._yf.Ticker(symbol)
-        articles = [self._normalise_item(item) for item in (ticker.news or [])]
-        return [a for a in articles if a["title"]][:10]
+        """Try multiple symbol formats to maximise yfinance hit rate."""
+        sym_upper = symbol.upper()
+        # Build candidates: if already has suffix try as-is; otherwise try .NS, .BO, bare
+        if "." in sym_upper or "^" in sym_upper:
+            candidates = [sym_upper]
+        else:
+            candidates = [f"{sym_upper}.NS", f"{sym_upper}.BO", sym_upper]
+
+        for sym in candidates:
+            try:
+                ticker = self._yf.Ticker(sym)
+                raw = ticker.news or []
+                articles = [self._normalise_item(item) for item in raw]
+                articles = [a for a in articles if a["title"]]
+                if articles:
+                    logger.debug("Got %d articles for %s", len(articles), sym)
+                    return articles[:10]
+            except Exception as e:
+                logger.debug("yfinance error for %s: %s", sym, e)
+                continue
+
+        logger.info("No news found for symbol %s (tried: %s)", symbol, candidates)
+        return []
+
 
     def _fetch_sync(self) -> list[dict[str, Any]]:
         seen_urls: set[str] = set()

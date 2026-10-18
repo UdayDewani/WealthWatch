@@ -169,6 +169,15 @@ class WealthDatabase:
             row = await cur.fetchone()
             return dict(row) if row else None
 
+    async def get_client_by_id_only(self, client_id: int) -> Optional[Dict]:
+        """Look up a client by their own ID — used in client-portal endpoints where
+        the client is already authenticated and no WM constraint is needed."""
+        async with self._db.execute(
+            "SELECT * FROM clients WHERE id=?", (client_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
     async def update_client(self, client_id: int, wm_id: int, data: dict) -> bool:
         fields = ["name","email","phone","pan","risk_profile","joined_date","notes"]
         updates = {k: data[k] for k in fields if k in data}
