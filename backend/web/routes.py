@@ -1054,7 +1054,17 @@ async def wm_stock_analysis(symbol: str, exchange: str = "NSE", wm=Depends(requi
 @router.get("/auth")
 async def upstox_auth():
     if not _upstox:
-        return {"error": "Upstox client not configured"}
+        raise HTTPException(503, "Upstox client not configured")
+    if not getattr(_upstox, "is_configured", True):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Upstox API credentials are set to default placeholders in backend/.env. "
+                "To resolve error UDAPI100068: "
+                "1) Set your valid UPSTOX_API_KEY (Client ID) and UPSTOX_SECRET_KEY in backend/.env. "
+                f"2) In the Upstox Developer Console (https://developer.upstox.com), configure your App's Redirect URL to exactly match: {_upstox._redirect}"
+            ),
+        )
     return RedirectResponse(_upstox.build_auth_url())
 
 

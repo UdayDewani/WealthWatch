@@ -354,3 +354,14 @@ Replaced the old Vite/React frontend (`frontend/`) with a new Next.js 16 + Tailw
 - **Python Syntax**: All clean across `wealth_manager_graph.py`, `routes.py`, `test_wm_analysis.py`.
 - **Frontend TypeScript**: `npx tsc --noEmit` exited 0 with 0 errors across all Next.js pages and components.
 
+## Upstox OAuth Error UDAPI100068 Resolution (2026-10-23)
+
+### Root Cause
+- Upstox error `UDAPI100068` (`Check your 'client_id' and 'redirect_uri'; one or both are incorrect.`) occurred when navigating to `/auth` because `UPSTOX_API_KEY` was still set to the default placeholder `your_upstox_api_key_here` in `backend/.env`.
+- Upstox API v2 requires a real App API Key (`client_id`) and an exact match between the App's registered Redirect URL in the Upstox Developer Console and the `redirect_uri` param sent in the request (`http://localhost:4040/callback`).
+
+### Fixes & Guards Added
+1. Added `UpstoxClient.is_configured` property in `backend/data/upstox_client.py` to detect placeholder credentials.
+2. Updated `/auth` route in `backend/web/routes.py` to intercept unconfigured credentials before redirecting to Upstox, providing an actionable 400 error detailing how to configure the Upstox Developer App.
+3. Added `UPSTOX_REDIRECT_URI` to `backend/.env.example` so users know the exact callback URL to configure in the Upstox Developer Console.
+

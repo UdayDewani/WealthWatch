@@ -97,6 +97,16 @@ class UpstoxClient:
         except OSError as exc:
             logger.warning("Could not persist Upstox access token: %s", exc)
 
+    @property
+    def is_configured(self) -> bool:
+        """Return True if non-placeholder credentials have been set in the environment."""
+        return bool(
+            self._api_key
+            and self._secret_key
+            and self._api_key not in ("your_upstox_api_key_here", "your_api_key_here")
+            and self._secret_key not in ("your_upstox_secret_key_here", "your_secret_key_here")
+        )
+
     # ── OAuth ─────────────────────────────────────────────────────────────
 
     def build_auth_url(self) -> str:
